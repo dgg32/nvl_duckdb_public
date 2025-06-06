@@ -14,7 +14,7 @@
     "style-loader": "^4.0.0",
     "webpack": "^5.95.0",
     "webpack-cli": "^5.1.4",
-    "webpack-dev-server": "^5.1.0"
+    "webpack-dev-server": "^5.2.1"
   },
   "dependencies": {
     "@neo4j-nvl/base": "^0.3.6",
