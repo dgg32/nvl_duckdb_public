@@ -474,7 +474,13 @@ function processConnections(node, connections, nvl) {
     
     // 6. Add to graph
     console.log(`Adding ${connections.nodes.length} nodes and ${newRels.length} relationships to graph`);
-    nvl.addAndUpdateElementsInGraph(connections.nodes, newRels);
+    const originalNode = nvl.getNodeById(node.id);
+    const updatedNode = {
+      ...originalNode,
+      ...node,
+    };
+    const finalNodes = connections.nodes.map(n => n.id === node.id ? updatedNode : n);
+    nvl.addAndUpdateElementsInGraph(finalNodes, newRels);
     
     // 7. Adjust view
     if (connections.nodes.length > 0) {
@@ -798,29 +804,43 @@ export const setupInteraction = (nvl) => {
           console.log(`Expanding node ${node.id}`);
           showNotification(`Expanding: ${getBestNodeCaption(node)}`);
           
-          // Fetch relationship data
-          const outgoingData = await get_relationship_of_node(node.id, node.labels[0], 'outgoing');
-          const incomingData = await get_relationship_of_node(node.id, node.labels[0], 'incoming');
-          
-          // Define handlers for dialog buttons
-          const processAllRelationships = async () => {
-            // Use the standard expandNode function for all relationships
-            const connections = await expandNode(node.id, node.labels[0], 'both');
+          // Fetch outgoing and incoming relationship data in parallel (Fix 1)
+          const [outgoingData, incomingData] = await Promise.all([
+            get_relationship_of_node(node.id, node.labels[0], 'outgoing'),
+            get_relationship_of_node(node.id, node.labels[0], 'incoming')
+          ]);
 
-            if (connections && connections.nodes && connections.relationships) {
-              // Make sure the original node in connections has the correct caption
-              const origNodeIndex = connections.nodes.findIndex(n => n.id === node.id);
-              if (origNodeIndex >= 0) {
-                connections.nodes[origNodeIndex].caption = getBestNodeCaption(node);
-              }
-              
-              // Apply caption function to all nodes
+          // Define handlers for dialog buttons
+          const processAllRelationships = () => {
+            // Reuse already-fetched data instead of making a 3rd network request (Fix 2)
+            const allRelTypes = new Set();
+            (outgoingData.results || []).forEach(r => r.relation && allRelTypes.add(r.relation));
+            (incomingData.results || []).forEach(r => r.relation && allRelTypes.add(r.relation));
+
+            if (allRelTypes.size === 0) return;
+
+            const seenNodeIds = new Set();
+            const seenRelIds = new Set();
+            const mergedNodes = [];
+            const mergedRels = [];
+
+            for (const relType of allRelTypes) {
+              const connections = processRelationshipType(relType, outgoingData, incomingData, node);
               connections.nodes.forEach(n => {
-                n.caption = getBestNodeCaption(n);
+                if (!seenNodeIds.has(n.id)) {
+                  seenNodeIds.add(n.id);
+                  mergedNodes.push(n);
+                }
               });
-              
-              processConnections(node, connections, nvl);
+              connections.relationships.forEach(r => {
+                if (!seenRelIds.has(r.id)) {
+                  seenRelIds.add(r.id);
+                  mergedRels.push(r);
+                }
+              });
             }
+
+            processConnections(node, { nodes: mergedNodes, relationships: mergedRels }, nvl);
           };
           
           const processSpecificRelationship = async (relType) => {

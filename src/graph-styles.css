@@ -1,4 +1,4 @@
-/* Dialog styles */
+/* ── Dialog ─────────────────────────────────────────────────── */
 .dialog-overlay {
   position: fixed;
   top: 0;
@@ -13,64 +13,81 @@
 }
 
 .dialog-container {
-  background-color: white;
+  background: var(--color-bg-surface);
   padding: 20px;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   min-width: 300px;
   max-width: 80%;
   max-height: 80%;
   overflow-y: auto;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+  font-family: var(--font-ui);
 }
 
 .dialog-title {
   margin-top: 0;
   margin-bottom: 16px;
-  border-bottom: 1px solid #eee;
+  border-bottom: 1px solid var(--color-border-light);
   padding-bottom: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--color-text-primary);
 }
 
-/* Button styles */
-.button-primary {
+/* ── Dialog / generic buttons ───────────────────────────────── */
+.button-primary,
+.button-secondary,
+.button-cancel,
+.button-fallback,
+.button-close {
   display: block;
   width: 100%;
-  padding: 10px;
-  margin: 8px 0;
-  border: none;
-  border-radius: 4px;
-  background-color: #4CAF50;
-  color: white;
+  padding: 8px;
+  margin: 6px 0;
+  font-size: 13px;
+  font-weight: 500;
+  font-family: var(--font-ui);
+  border: 1px solid rgba(0, 0, 0, 0.14);
+  border-radius: var(--radius-sm);
   cursor: pointer;
-  font-weight: bold;
+  transition: background var(--transition), box-shadow var(--transition);
+}
+
+.button-primary,
+.button-fallback {
+  background: var(--color-btn-add);
+  color: var(--color-text-primary);
+}
+
+.button-primary:hover,
+.button-fallback:hover {
+  background: #b3d7f7;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
 }
 
 .button-secondary {
-  display: block;
-  width: 100%;
-  padding: 10px;
-  margin: 8px 0;
-  border: none;
-  border-radius: 4px;
-  background-color: #f0f0f0;
-  cursor: pointer;
+  background: var(--color-bg-panel);
+  color: var(--color-text-primary);
 }
 
 .button-secondary:hover {
-  background-color: #e0e0e0;
+  background: #d9d9d9;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
 }
 
-.button-cancel {
-  display: block;
-  width: 100%;
-  padding: 10px;
-  margin-top: 16px;
-  border: none;
-  border-radius: 4px;
-  background-color: #ddd;
-  cursor: pointer;
+.button-cancel,
+.button-close {
+  background: var(--color-bg-panel);
+  color: var(--color-text-secondary);
+  margin-top: 14px;
 }
 
-/* Loading styles */
+.button-cancel:hover,
+.button-close:hover {
+  background: #d9d9d9;
+}
+
+/* ── Loading overlay ────────────────────────────────────────── */
 .loading-overlay {
   position: fixed;
   top: 0;
@@ -85,13 +102,16 @@
 }
 
 .loading-box {
-  background-color: white;
+  background: var(--color-bg-surface);
   padding: 20px;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+  font-family: var(--font-ui);
+  font-size: 13px;
+  color: var(--color-text-secondary);
 }
 
-/* Notification styles */
+/* ── Notifications ──────────────────────────────────────────── */
 #graph-notifications {
   position: absolute;
   bottom: 20px;
@@ -104,56 +124,50 @@
 }
 
 .graph-notification {
-  background-color: rgba(0, 0, 0, 0.7);
-  color: white;
+  background-color: rgba(0, 0, 0, 0.72);
+  color: #fff;
   padding: 8px 16px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   margin: 8px;
   display: inline-block;
   max-width: 80%;
   box-shadow: 0 2px 10px rgba(0, 0, 0, 0.2);
   transition: opacity 0.3s ease-in-out;
   opacity: 0;
-  font-family: Arial, sans-serif;
-  font-size: 14px;
+  font-family: var(--font-ui);
+  font-size: 13px;
 }
 
-/* Other UI elements */
+/* ── Misc UI helpers ────────────────────────────────────────── */
 .separator {
-  margin: 16px 0 8px 0;
-  font-weight: bold;
+  margin: 16px 0 8px;
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--color-text-secondary);
 }
 
 .loading-message {
   padding: 10px;
+  font-size: 13px;
+  color: var(--color-text-muted);
 }
 
 .no-relationships-message {
   margin: 16px 0;
-  color: #666;
+  font-size: 13px;
+  color: var(--color-text-muted);
+  font-style: italic;
 }
 
-/* Button styles for cancel, fallback, and close buttons */
-
-.button-fallback {
-  display: block;
-  width: 100%;
-  padding: 10px;
-  margin: 8px 0;
-  border: none;
-  border-radius: 4px;
-  background-color: #4CAF50;
-  color: white;
-  cursor: pointer;
+/* ── Utility classes ────────────────────────────────────────── */
+.hint-text {
+  font-size: 11px;
+  font-style: italic;
+  color: var(--color-text-muted);
 }
 
-.button-close {
-  display: block;
-  width: 100%;
-  padding: 10px;
-  margin-top: 16px;
-  border: none;
-  border-radius: 4px;
-  background-color: #ddd;
-  cursor: pointer;
+.hint-error {
+  font-size: 11px;
+  font-style: italic;
+  color: #c0392b;
 }

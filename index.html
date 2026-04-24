@@ -4,150 +4,308 @@
 <title>NVL for DuckPGQ</title>
 
 <style>
+/* ── Design Tokens ──────────────────────────────────────────── */
+:root {
+  --color-bg-canvas:      #f8f8f8;
+  --color-bg-panel:       #f0f0f0;
+  --color-bg-surface:     #ffffff;
+  --color-border:         #d0d0d0;
+  --color-border-light:   #e4e4e4;
+  --color-text-primary:   #1a1a1a;
+  --color-text-secondary: #555;
+  --color-text-muted:     #888;
+  --color-accent:         #3b7dd8;
+  --color-btn-add:        #cce5ff;
+  --color-btn-success:    #d4edda;
+  --color-btn-danger:     #f8d7da;
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --transition: 0.15s ease;
+  --font-ui:   -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  --font-mono: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+}
+
+/* ── Reset ──────────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; }
+
 body, html {
   margin: 0;
   padding: 0;
   height: 100%;
   overflow: hidden;
+  font-family: var(--font-ui);
+  font-size: 14px;
+  color: var(--color-text-primary);
 }
+
+/* ── Top-level layout: horizontal split ─────────────────────── */
 .container {
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
   height: 100vh;
   overflow: hidden;
 }
+
+/* ── Left column: query bar + canvas ────────────────────────── */
+#left-col {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 200px;
+  overflow: hidden;
+}
+
 #app {
   flex: 1;
-  min-height: 600px;
-  /* background-image: linear-gradient(lightgrey, white); */
-  border: dashed 2px black;
+  background: var(--color-bg-canvas);
   overflow: hidden;
   position: relative;
 }
-/* Query input area */
+
+/* ── Query area ─────────────────────────────────────────────── */
 #query-area {
-  padding: 15px;
-  background-color: #f0f0f0;
-  border-bottom: 1px solid #ddd;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 15px;
+  background: var(--color-bg-panel);
+  border-bottom: 1px solid var(--color-border);
+  flex-shrink: 0;
 }
+
 #cypher-input {
-  width: 85%;
+  flex: 1;
   padding: 8px;
-  font-family: monospace;
-  border: 1px solid #ccc;
-  border-radius: 4px;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-surface);
+  color: var(--color-text-primary);
+  transition: border-color var(--transition), box-shadow var(--transition);
 }
+
+#cypher-input:focus {
+  outline: none;
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 2px rgba(59, 125, 216, 0.18);
+}
+
 #run-query {
-  width: 10%;
-  margin-left: 10px;
-  padding: 8px 12px;
-  background-color: #4CAF50;
-  color: white;
-  border: none;
-  border-radius: 4px;
+  padding: 8px 16px;
+  font-size: 13px;
+  font-weight: 500;
+  font-family: var(--font-ui);
+  background: var(--color-btn-success);
+  color: var(--color-text-primary);
+  border: 1px solid rgba(0, 0, 0, 0.14);
+  border-radius: var(--radius-sm);
   cursor: pointer;
+  white-space: nowrap;
+  transition: background var(--transition), box-shadow var(--transition);
 }
+
 #run-query:hover {
-  background-color: #45a049;
+  background: #c3e6cb;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
 }
-/* CSS for Properties Panel */
-#properties-panel {
-  background-color: #f8f9fa;
-  border-top: 1px solid #ddd;
-  padding: 15px;
+
+#run-query:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(59, 125, 216, 0.4);
+}
+
+#run-query:active {
+  transform: translateY(1px);
+  box-shadow: none;
+}
+
+/* ── Resize handle ──────────────────────────────────────────── */
+#resize-handle {
+  width: 5px;
+  background: var(--color-border);
+  cursor: col-resize;
+  flex-shrink: 0;
+  transition: background var(--transition);
+}
+
+#resize-handle:hover,
+#resize-handle.dragging {
+  background: #aaa;
+}
+
+/* ── Right panel ────────────────────────────────────────────── */
+#panel {
+  width: 450px;
+  min-width: 200px;
+  max-width: 80vw;
+  display: flex;
+  flex-direction: column;
+  gap: 15px;
+  padding: 20px;
+  background: var(--color-bg-panel);
+  border-left: 1px solid var(--color-border);
   overflow-y: auto;
-  height: 300px;
-  font-family: Arial, sans-serif;
+  overflow-x: hidden;
+  flex-shrink: 0;
 }
+
+/* ── Properties card (inside #panel) ───────────────────────── */
+#properties-panel {
+  background: var(--color-bg-surface);
+  border: 1px solid var(--color-border-light);
+  border-radius: var(--radius-md);
+  padding: 12px;
+  overflow-y: auto;
+  font-family: var(--font-ui);
+}
+
 #properties-panel h3 {
-  margin-top: 0;
-  margin-bottom: 10px;
-  color: #333;
+  margin: 0 0 10px 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text-primary);
 }
+
+/* ── Property table ─────────────────────────────────────────── */
 .property-table {
   width: 100%;
   border-collapse: collapse;
-}
-.property-table th, .property-table td {
-  padding: 8px;
-  text-align: left;
-  border-bottom: 1px solid #ddd;
-}
-.property-table th {
-  background-color: #eaeaea;
-  font-weight: bold;
-}
-.property-table tr:hover {
-  background-color: #f1f1f1;
-}
-.no-selection {
-  color: #888;
-  font-style: italic;
-}
-.toggle-content-btn {
-  background-color: #f0f0f0;
-  border: 1px solid #ddd;
-  border-radius: 3px;
-  padding: 2px 8px;
   font-size: 12px;
-  cursor: pointer;
-  margin-top: 5px;
-  color: #555;
-  transition: background-color 0.2s;
+  background: var(--color-bg-surface);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  border: 1px solid var(--color-border-light);
 }
-.toggle-content-btn:hover {
-  background-color: #e0e0e0;
-  color: #333;
+
+.property-table th {
+  background: #ebebeb;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+  padding: 6px 8px;
+  text-align: left;
 }
-.truncated-content {
+
+.property-table td {
+  padding: 6px 8px;
+  text-align: left;
+  border-bottom: 1px solid var(--color-border-light);
+  vertical-align: top;
+}
+
+.property-table td:first-child {
+  font-weight: 500;
+  width: 35%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--color-text-primary);
+}
+
+.property-table td:last-child {
+  color: var(--color-text-secondary);
   word-break: break-word;
 }
+
+.property-table tr:hover td {
+  background: #f5f8ff;
+}
+
+/* ── Toggle / truncation buttons ────────────────────────────── */
+.toggle-content-btn {
+  background: var(--color-bg-panel);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  padding: 2px 8px;
+  font-size: 12px;
+  font-family: var(--font-ui);
+  cursor: pointer;
+  margin-top: 5px;
+  color: var(--color-text-secondary);
+  transition: background var(--transition);
+}
+
+.toggle-content-btn:hover {
+  background: #d9d9d9;
+  color: var(--color-text-primary);
+}
+
+.truncated-content,
 .full-content {
   word-break: break-word;
 }
-/* Table cell styling to better accommodate long content */
-.property-table td {
-  vertical-align: top;
-  max-width: 800px; /* Limit how wide the value column can get */
-}
-/* First column (property names) should be narrower */
-.property-table td:first-child {
-  width: 20%;
-  white-space: nowrap;
+
+/* ── Utility ────────────────────────────────────────────────── */
+.no-selection {
+  color: var(--color-text-muted);
+  font-style: italic;
+  font-size: 13px;
+  margin: 0;
 }
 </style>
 </head>
 <body>
 <div class="container">
-  <!-- Cypher Query Input Area -->
-  <div id="query-area">
-    <input type="text" id="cypher-input" placeholder="Enter Cypher query (e.g., MATCH (n)-[r]-(m) RETURN n,r,m LIMIT 25)">
-    <button id="run-query">Run</button>
+
+  <!-- Left column: query bar + graph canvas -->
+  <div id="left-col">
+    <div id="query-area">
+      <input type="text" id="cypher-input"
+             placeholder="Enter query (e.g., FROM GRAPH_TABLE … LIMIT 25)">
+      <button id="run-query">Run</button>
+    </div>
+    <div id="app"></div>
   </div>
-  
-  <!-- Graph Visualization Panel -->
-  <div id="app">
-    <div
-      style="
-        font-size: 250px;
-        color: lightgrey;
-        text-align: center;
-        width: 100%;
-        padding-top: 5%;
-        opacity: 0.5;
-      "
-    >
+
+  <!-- Drag-to-resize handle -->
+  <div id="resize-handle"></div>
+
+  <!-- Right panel: properties -->
+  <div id="panel">
+    <div id="properties-panel">
+      <div id="properties-content">
+        <p class="no-selection">Click on a node or relationship to view its properties</p>
+      </div>
     </div>
   </div>
-  
-  <!-- Properties Panel -->
-  <div id="properties-panel">
-    <!-- <h3>Properties</h3> -->
-    <div id="properties-content">
-      <p class="no-selection">Click on a node or relationship to view its properties</p>
-    </div>
-  </div>
+
 </div>
+
+<script>
+  // Resize handle drag logic
+  (function () {
+    const handle = document.getElementById('resize-handle');
+    const panel  = document.getElementById('panel');
+    let dragging = false;
+
+    handle.addEventListener('mousedown', (e) => {
+      dragging = true;
+      handle.classList.add('dragging');
+      document.body.style.userSelect  = 'none';
+      document.body.style.cursor      = 'col-resize';
+    });
+
+    document.addEventListener('mousemove', (e) => {
+      if (!dragging) return;
+      const containerRight = document.querySelector('.container').getBoundingClientRect().right;
+      const newWidth = Math.min(
+        Math.max(containerRight - e.clientX, 200),
+        window.innerWidth * 0.8
+      );
+      panel.style.width = newWidth + 'px';
+    });
+
+    document.addEventListener('mouseup', () => {
+      if (!dragging) return;
+      dragging = false;
+      handle.classList.remove('dragging');
+      document.body.style.userSelect = '';
+      document.body.style.cursor     = '';
+    });
+  })();
+</script>
+
 <script type="module" src="./src/index.js"></script>
 </body>
 </html>

@@ -328,12 +328,34 @@ export const displayProperties = async (element, elementType) => {
   // Add properties in sorted order
   for (const key of sortedKeys) {
     let value = properties[key];
-    
+
     // For node name property, if it matches the ID, use the best caption instead
     if (elementType === 'node' && key === 'name' && value === element.id) {
       value = getBestNodeCaption(element);
     }
-    
+
+    // Expand a "properties" column that holds a JSON map of {propName: {value, type}, ...}
+    if (key === 'properties') {
+      let parsed = value;
+      if (typeof value === 'string') {
+        try { parsed = JSON.parse(value); } catch (e) { parsed = null; }
+      }
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        for (const propName of Object.keys(parsed).sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }))) {
+          const entry = parsed[propName];
+          const displayValue = (entry && typeof entry === 'object' && 'value' in entry) ? entry.value : entry;
+          hasProperties = true;
+          html += `
+            <tr>
+              <td>${propName}</td>
+              <td>${formatPropertyValue(displayValue, propName)}</td>
+            </tr>
+          `;
+        }
+        continue; // skip rendering the raw "properties" row
+      }
+    }
+
     hasProperties = true;
     html += `
       <tr>

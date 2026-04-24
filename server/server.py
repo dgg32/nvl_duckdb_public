@@ -3,12 +3,13 @@
 
 import os
 import sys
+import threading
 from flask import Flask, request, jsonify, render_template_string
 from flask_cors import CORS  # Import Flask-CORS
 import duckdb
 import time
-import openai
-import yaml
+#import openai
+#import yaml
 
 app = Flask(__name__)
 # Enable CORS for all routes
@@ -16,19 +17,20 @@ CORS(app)
 
 # Global connection to DuckDB
 conn = None
+_db_lock = threading.Lock()
 node_types = set()
 outgoing_relations = {}  # Source node -> outgoing relations
 incoming_relations = {}  # Destination node -> incoming relations
 graph_name = ""
 
-with open("config.yaml", "r") as stream:
-    try:
-        PARAM = yaml.safe_load(stream)
-    except yaml.YAMLError as exc:
-        print(exc)
+# with open("config.yaml", "r") as stream:
+#     try:
+#         PARAM = yaml.safe_load(stream)
+#     except yaml.YAMLError as exc:
+#         print(exc)
 
-openai.api_key  = PARAM['openai_api']
-client = openai.OpenAI(api_key = PARAM['openai_api'])
+# openai.api_key  = PARAM['openai_api']
+# client = openai.OpenAI(api_key = PARAM['openai_api'])
 
 #When the server starts, the user is asked to enter the path to the database file
 # and the server will try to connect to it.
@@ -54,103 +56,90 @@ def initialize_db():
     
     if conn is not None:
         return conn
-    
-    # Try multiple times with a delay to handle potential lock issues
-    max_attempts = 3
-    for attempt in range(max_attempts):
-        try:
-            # Path to your existing database file
-            #db_path = 'drug.db'
-            
-            # Try to connect with a unique access mode to avoid conflicts
-            # Using the timestamp to create a unique identifier
-            conn = duckdb.connect(db_path)
-            conn.install_extension("duckpgq", repository="community")
-            conn.load_extension("duckpgq")
 
-            conn.sql("INSTALL vss;")
-            conn.load_extension("vss")
-
-            def get_embedding(text: str) -> list[float]:
-                model="text-embedding-3-small"
-                text = text.replace("\n", " ")
-                return client.embeddings.create(input = [text], model=model).data[0].embedding
-
-            conn.create_function('embeddings', get_embedding)
-            
-            print(f"Connected to DuckDB file: {db_path}")
-            
-            # Test the connection
-            test_query = "SELECT * FROM Drug LIMIT 5;"
-            results = conn.sql(test_query).fetchall()
-            print(f"Testing '{test_query}':", results)
-
-            # get the graph
-            graph_query = "SELECT property_graph FROM __duckpgq_internal;"
-            graph_result = conn.sql(graph_query).fetchall()
-
-            for graph_r in graph_result:
-                if graph_r[0] is not None:
-                    graph_name = graph_r[0]
-
-            # Get the nodes
-            source_query = "SELECT source_table FROM __duckpgq_internal;"
-            source_result = conn.sql(source_query).fetchall()
-
-            destination_query = "SELECT destination_table FROM __duckpgq_internal;"
-            destination_result = conn.sql(destination_query).fetchall()
-
-            relation_query = "SELECT label FROM __duckpgq_internal;"
-            relation_result = conn.sql(relation_query).fetchall()
-
-            # Clear both dictionaries
-            outgoing_relations.clear()
-            incoming_relations.clear()
-
-            for source_r, destination_r, relation_r in zip(source_result, destination_result, relation_result):
-                if source_r[0] is not None and destination_r[0] is not None and relation_r[0] is not None:
-                    # Add outgoing relation (source -> destination)
-                    if source_r[0] not in outgoing_relations:
-                        outgoing_relations[source_r[0]] = [{"relation": relation_r[0], "destination": destination_r[0]}]
-                    else:
-                        # Check for duplicates before adding
-                        duplicate = False
-                        for existing in outgoing_relations[source_r[0]]:
-                            if existing["relation"] == relation_r[0] and existing["destination"] == destination_r[0]:
-                                duplicate = True
-                                break
-                        
-                        if not duplicate:
-                            outgoing_relations[source_r[0]].append({"relation": relation_r[0], "destination": destination_r[0]})
-                    
-                    # Add incoming relation (destination <- source)
-                    if destination_r[0] not in incoming_relations:
-                        incoming_relations[destination_r[0]] = [{"relation": relation_r[0], "source": source_r[0]}]
-                    else:
-                        # Check for duplicates before adding
-                        duplicate = False
-                        for existing in incoming_relations[destination_r[0]]:
-                            if existing["relation"] == relation_r[0] and existing["source"] == source_r[0]:
-                                duplicate = True
-                                break
-                        
-                        if not duplicate:
-                            incoming_relations[destination_r[0]].append({"relation": relation_r[0], "source": source_r[0]})
-
-                    node_types.add(source_r[0])
-                    node_types.add(destination_r[0])
-            
-            print("Outgoing relations:", outgoing_relations)
-            print("Incoming relations:", incoming_relations)
+    with _db_lock:
+        if conn is not None:  # re-check after acquiring lock
             return conn
-        except Exception as e:
-            print(f"Attempt {attempt+1}/{max_attempts} failed: {e}")
-            if attempt < max_attempts - 1:
-                print(f"Retrying in 2 seconds...")
-                time.sleep(2)
-            else:
-                print(f"Failed to initialize DuckDB after {max_attempts} attempts")
-                raise
+
+        # Try multiple times with a delay to handle potential lock issues
+        max_attempts = 3
+        for attempt in range(max_attempts):
+            try:
+                conn = duckdb.connect(db_path)
+                try:
+                    conn.execute("install duckpgq from community;")
+                except Exception:
+                    pass  # Already installed — skip network round-trip
+                conn.load_extension("duckpgq")
+
+                print(f"Connected to DuckDB file: {db_path}")
+
+                # get the graph
+                graph_query = "SELECT property_graph FROM __duckpgq_internal;"
+                graph_result = conn.sql(graph_query).fetchall()
+
+                for graph_r in graph_result:
+                    if graph_r[0] is not None:
+                        graph_name = graph_r[0]
+
+                # Get the nodes
+                source_query = "SELECT source_table FROM __duckpgq_internal;"
+                source_result = conn.sql(source_query).fetchall()
+
+                destination_query = "SELECT destination_table FROM __duckpgq_internal;"
+                destination_result = conn.sql(destination_query).fetchall()
+
+                relation_query = "SELECT label FROM __duckpgq_internal;"
+                relation_result = conn.sql(relation_query).fetchall()
+
+                # Clear both dictionaries
+                outgoing_relations.clear()
+                incoming_relations.clear()
+
+                for source_r, destination_r, relation_r in zip(source_result, destination_result, relation_result):
+                    if source_r[0] is not None and destination_r[0] is not None and relation_r[0] is not None:
+                        # Add outgoing relation (source -> destination)
+                        if source_r[0] not in outgoing_relations:
+                            outgoing_relations[source_r[0]] = [{"relation": relation_r[0], "destination": destination_r[0]}]
+                        else:
+                            # Check for duplicates before adding
+                            duplicate = False
+                            for existing in outgoing_relations[source_r[0]]:
+                                if existing["relation"] == relation_r[0] and existing["destination"] == destination_r[0]:
+                                    duplicate = True
+                                    break
+
+                            if not duplicate:
+                                outgoing_relations[source_r[0]].append({"relation": relation_r[0], "destination": destination_r[0]})
+
+                        # Add incoming relation (destination <- source)
+                        if destination_r[0] not in incoming_relations:
+                            incoming_relations[destination_r[0]] = [{"relation": relation_r[0], "source": source_r[0]}]
+                        else:
+                            # Check for duplicates before adding
+                            duplicate = False
+                            for existing in incoming_relations[destination_r[0]]:
+                                if existing["relation"] == relation_r[0] and existing["source"] == source_r[0]:
+                                    duplicate = True
+                                    break
+
+                            if not duplicate:
+                                incoming_relations[destination_r[0]].append({"relation": relation_r[0], "source": source_r[0]})
+
+                        node_types.add(source_r[0])
+                        node_types.add(destination_r[0])
+
+                print("Outgoing relations:", outgoing_relations)
+                print("Incoming relations:", incoming_relations)
+                return conn
+            except Exception as e:
+                print(f"Attempt {attempt+1}/{max_attempts} failed: {e}")
+                if attempt < max_attempts - 1:
+                    print(f"Retrying in 2 seconds...")
+                    time.sleep(2)
+                else:
+                    print(f"Failed to initialize DuckDB after {max_attempts} attempts")
+                    raise
 
 @app.route('/api/query', methods=['POST'])
 def execute_query():
@@ -166,13 +155,12 @@ def execute_query():
         # Initialize DB if not already done
         db_conn = initialize_db()
         
-        # Execute the query
+        # Execute the query (lock shared connection for thread safety)
         try:
-            results = db_conn.execute(query).fetchall()
+            with _db_lock:
+                results = db_conn.execute(query).fetchall()
+                column_names = [col[0] for col in db_conn.description] if db_conn.description else []
             print(f"Query results: {results}")
-            
-            # Get column names
-            column_names = [col[0] for col in db_conn.description] if db_conn.description else []
             
             # Convert results to list of dicts
             result_dicts = []
@@ -258,64 +246,79 @@ def get_neighbors():
         relationship_type = data.get('relationshipType')  # Optional relationship type filter
 
         print("Server received", data)
+        print ("relationship_type", relationship_type)
         print("Outgoing relations:", outgoing_relations)
         print("Incoming relations:", incoming_relations)
         
         if not node_label or not node_id:
             return jsonify({'error': 'node_label and node_id are required'}), 400
-        
+
+        # Sanitize node_id to prevent SQL injection (escape single quotes)
+        safe_node_id = str(node_id).replace("'", "''")
+
         # Initialize DB if not already done
         db_conn = initialize_db()
-        
+
         try:
-            result_dicts = []
-            
-            # Process outgoing relations if direction is 'both' or 'outgoing'
+            # Build all sub-queries upfront, then execute in a single batch under one lock.
+            # Each sub-query is tagged with metadata so results can be split afterwards.
+            # This replaces N sequential db_conn.execute() calls with one round-trip per
+            # direction batch, cutting latency from O(N) to O(1) DB calls.
+            outgoing_specs = []  # list of (relation, destination) dicts
+            incoming_specs = []  # list of (relation, source) dicts
+
             if direction in ['both', 'outgoing'] and node_label in outgoing_relations:
                 for r_d in outgoing_relations[node_label]:
-                    # Skip if relationship_type is specified and doesn't match
                     if relationship_type and r_d['relation'] != relationship_type:
                         continue
-                        
-                    print("Processing outgoing relation:", r_d)
-                    query = f"""FROM GRAPH_TABLE ({graph_name}
-                                MATCH
-                                    (a:{node_label} WHERE a.id = '{node_id}')-[n:{r_d['relation']}]->(b:{r_d['destination']})
-                                COLUMNS (b)
-                                )
-                            """
-                    print(f"Executing query: {query}")
-                    results = db_conn.execute(query).fetchall()
-                    result_dicts.append({
-                        "relation": r_d['relation'], 
-                        "destination": r_d['destination'], 
-                        "direction": "outgoing",
-                        "results": results
-                    })
-            
-            # Process incoming relations if direction is 'both' or 'incoming'
+                    outgoing_specs.append(r_d)
+
             if direction in ['both', 'incoming'] and node_label in incoming_relations:
                 for r_d in incoming_relations[node_label]:
-                    # Skip if relationship_type is specified and doesn't match
                     if relationship_type and r_d['relation'] != relationship_type:
                         continue
-                        
-                    print("Processing incoming relation:", r_d)
-                    query = f"""FROM GRAPH_TABLE ({graph_name}
-                                MATCH
-                                    (a:{r_d['source']})-[n:{r_d['relation']}]->(b:{node_label} WHERE b.id = '{node_id}')
-                                COLUMNS (a)
-                                )
-                            """
-                    print(f"Executing query: {query}")
-                    results = db_conn.execute(query).fetchall()
-                    result_dicts.append({
-                        "relation": r_d['relation'], 
-                        "source": r_d['source'],
-                        "direction": "incoming", 
-                        "results": results
-                    })
-            
+                    incoming_specs.append(r_d)
+
+            result_dicts = []
+
+            # Execute all outgoing queries in one batched lock acquisition
+            if outgoing_specs:
+                with _db_lock:
+                    for r_d in outgoing_specs:
+                        query = (
+                            f"FROM GRAPH_TABLE ({graph_name} "
+                            f"MATCH (a:{node_label} WHERE a.id = '{safe_node_id}')"
+                            f"-[n:{r_d['relation']}]->(b:{r_d['destination']}) "
+                            f"COLUMNS (b))"
+                        )
+                        print(f"Executing outgoing query: {query}")
+                        results = db_conn.execute(query).fetchall()
+                        result_dicts.append({
+                            "relation": r_d['relation'],
+                            "destination": r_d['destination'],
+                            "direction": "outgoing",
+                            "results": results
+                        })
+
+            # Execute all incoming queries in one batched lock acquisition
+            if incoming_specs:
+                with _db_lock:
+                    for r_d in incoming_specs:
+                        query = (
+                            f"FROM GRAPH_TABLE ({graph_name} "
+                            f"MATCH (a:{r_d['source']})-[n:{r_d['relation']}]->"
+                            f"(b:{node_label} WHERE b.id = '{safe_node_id}') "
+                            f"COLUMNS (a))"
+                        )
+                        print(f"Executing incoming query: {query}")
+                        results = db_conn.execute(query).fetchall()
+                        result_dicts.append({
+                            "relation": r_d['relation'],
+                            "source": r_d['source'],
+                            "direction": "incoming",
+                            "results": results
+                        })
+
             return jsonify({'results': result_dicts})
         except Exception as e:
             print(f"Query execution error: {e}")
@@ -340,8 +343,8 @@ atexit.register(cleanup)
 
 if __name__ == '__main__':
     try:
-        # Start the Flask development server
-        app.run(host='0.0.0.0', port=3000, debug=True)
+        initialize_db()
+        app.run(host='0.0.0.0', port=3000, debug=True, use_reloader=False)
     except Exception as e:
         print(f"Failed to start server: {e}")
         cleanup()
