@@ -1,5 +1,5 @@
-import { expandNode, colorMap, get_relationship_of_node} from "./connection";
-import { getBestNodeCaption, formatPropertyValue, showNotification, displayProperties } from "./utils";
+import { get_relationship_of_node } from "./connection";
+import { getBestNodeCaption, colorForLabel, formatPropertyValue, showNotification, displayProperties } from "./utils";
 import {
   PanInteraction,
   ZoomInteraction,
@@ -9,53 +9,44 @@ import {
 
 import './graph-styles.css';
 
-// State tracking for graph expansion
-const nodeOwnership = new Map(); // Tracks which nodes expanded which other nodes
-const nodeRelationshipsByType = new Map(); // Tracks relationship types for each node
-const expandedNodes = new Map(); // Map of node ID -> array of child node IDs
-const initialNodeIds = new Set(); // Set to track original nodes
-const initialRelationshipIds = new Set(); // Set to track original relationships
-const expandedRelationships = new Map(); // Map of node ID -> Set of relationship IDs
-const nodeHierarchy = new Map(); // Map of parent node ID -> Set of direct child node IDs
+// State tracking for graph expansion.
+//
+// Expansion is per-relationship-type: a double-click on a node opens a dialog
+// letting the user add one relationship type or all of them. Each pick is
+// recorded as an "expansion record" so collapsing that node later removes
+// exactly the nodes/relationships it revealed — nothing more, nothing less.
+// A node revealed by more than one expansion is reference-counted, so it only
+// disappears once every expansion that revealed it has been collapsed, and
+// collapsing a node cascades into any of its own revealed nodes that were
+// themselves expanded further, so nothing is left orphaned mid-collapse.
+const initialNodeIds = new Set(); // "seed" node ids from the last query — never auto-collapsed
+const expanded = new Map(); // node id -> array of expansion records {nodeIds: Set, relIds: Set}
+const nodeRefs = new Map(); // child node id -> how many live expansions revealed it
+let lastToggle = { id: null, t: 0 }; // debounces duplicate dblclick events on the same node
 
-const default_node_color = "#4682B4";
 /**
- * Save the initial state of the graph to track which nodes/relationships were original
+ * Save the initial state of the graph to track which nodes were original
  * @param {Object} nvl - NVL instance
  */
 export const saveInitialGraphState = (nvl) => {
   if (!nvl) return;
-  
+
   try {
     // Clear any previous state
     initialNodeIds.clear();
-    expandedNodes.clear();
-    expandedRelationships.clear();
-    nodeHierarchy.clear();
-    nodeOwnership.clear();
-    
+    expanded.clear();
+    nodeRefs.clear();
+
     // Save initial node IDs
     const currentNodes = nvl.getNodes();
     if (currentNodes && Array.isArray(currentNodes)) {
       currentNodes.forEach(node => {
         if (node && node.id) {
           initialNodeIds.add(node.id);
-          console.log(`Added initial node: ${node.id} (${getBestNodeCaption(node)})`);
         }
       });
     }
 
-    // Save initial relationship IDs
-    const currentRelationships = nvl.getRelationships();
-    if (currentRelationships && Array.isArray(currentRelationships)) {
-      currentRelationships.forEach(rel => {
-        if (rel && rel.id) {
-          initialRelationshipIds.add(rel.id);
-          console.log(`Added initial relationship: ${rel.id}`);
-        }
-      });
-    }
-    
     console.log("Saved initial graph state with nodes:", initialNodeIds.size);
   } catch (error) {
     console.error("Error saving initial graph state:", error);
@@ -363,129 +354,80 @@ function showLoadingOverlay(relType) {
 }
 
 /**
- * Process and visualize connections between nodes
+ * Add the picked subset of an expansion's connections to the graph and record
+ * it as one expansion record, so the matching collapse can undo precisely
+ * this expansion (and nothing that another expansion also depends on).
  * @param {Object} node - The node being expanded
  * @param {Object} connections - Object containing nodes and relationships to add
  * @param {Object} nvl - NVL instance
  */
-function processConnections(node, connections, nvl) {
+function applyExpansion(node, connections, nvl) {
   if (!connections || !connections.nodes || !connections.relationships) {
     console.error("Invalid connections object:", connections);
     return;
   }
-  
+
   try {
-    // 1. Register node ownership - track which nodes were added by this expansion
-    const childNodeIds = connections.nodes
-      .filter(n => n.id !== node.id)
-      .map(n => n.id);
-    
-    // Record ownership for each child node
-    childNodeIds.forEach(childId => {
-      if (!nodeOwnership.has(childId)) {
-        nodeOwnership.set(childId, new Set());
-      }
-      nodeOwnership.get(childId).add(node.id);
-    });
-    
-    // 2. Track relationships by type for organized collapse
-    if (!nodeRelationshipsByType.has(node.id)) {
-      nodeRelationshipsByType.set(node.id, new Map());
-    }
-    
-    const relTypeMap = nodeRelationshipsByType.get(node.id);
+    // Snapshot what's already in the graph before this expansion adds anything
+    const existingNodeIds = new Set(nvl.getNodes().map(n => n.id));
+    const existingRelIds = new Set(
+      nvl.getRelationships().map(r => `${r.from}_${(r.type || r.caption || '').toUpperCase()}_${r.to}`)
+    );
+
+    const rec = { nodeIds: new Set(), relIds: new Set() };
+    const relsToAdd = [];
+
+    // Normalize relationships and collect only the ones this expansion actually
+    // introduces; every other node it reveals gets its reference count bumped,
+    // whether or not that node already existed in the graph.
     connections.relationships.forEach(rel => {
-      const isOutgoing = rel.from === node.id;
-      const relType = rel.type.toUpperCase();
-      const relatedNodeId = isOutgoing ? rel.to : rel.from;
-      
-      // Skip self-relationships
-      if (relatedNodeId === node.id) return;
-      
-      // Ensure relationship type exists in the map
-      if (!relTypeMap.has(relType)) {
-        relTypeMap.set(relType, new Set());
+      rel.type = rel.type.toUpperCase();
+      rel.caption = rel.caption ? rel.caption.toUpperCase() : rel.type;
+      rel.id = `${rel.from}_${rel.type}_${rel.to}`;
+
+      if (!existingRelIds.has(rel.id)) {
+        existingRelIds.add(rel.id);
+        relsToAdd.push(rel);
+        rec.relIds.add(rel.id);
       }
-      
-      // Add the related node to this relationship type
-      relTypeMap.get(relType).add(relatedNodeId);
+
+      const otherId = rel.from === node.id ? rel.to : rel.from;
+      if (otherId === node.id || initialNodeIds.has(otherId)) return; // seeds are permanent
+
+      if (!rec.nodeIds.has(otherId)) {
+        rec.nodeIds.add(otherId);
+        nodeRefs.set(otherId, (nodeRefs.get(otherId) || 0) + 1);
+      }
     });
-    
-    // 3. Apply consistent visual styling to nodes
+
+    // Apply consistent visual styling and collect genuinely new nodes
+    const nodesToAdd = [];
     connections.nodes.forEach(n => {
-      // Apply color based on label
+      if (n.id === node.id) return; // the expanded node itself is merged in below
       if (n.labels && n.labels.length > 0) {
-        const label = n.labels[0];
-        if (colorMap.has(label)) {
-          n.color = colorMap.get(label);
-        }
-        else {
-          n.color = default_node_color; // Default color
-        }
+        n.color = colorForLabel(n.labels[0]);
       }
-      
-      // Set caption using the utility function
       n.caption = getBestNodeCaption(n);
-    });
-
-    // 4. Update tracking structures
-    
-    // Update hierarchy
-    if (!nodeHierarchy.has(node.id)) {
-      nodeHierarchy.set(node.id, new Set());
-    }
-    
-    childNodeIds.forEach(id => nodeHierarchy.get(node.id).add(id));
-    expandedNodes.set(node.id, childNodeIds);
-    
-    // Track relationships
-    if (!expandedRelationships.has(node.id)) {
-      expandedRelationships.set(node.id, new Set());
-    }
-    
-    // Normalize relationship types and create consistent IDs
-    connections.relationships.forEach(rel => {
-      rel.type = rel.type.toUpperCase();
-      rel.caption = rel.caption ? rel.caption.toUpperCase() : rel.type;
-      
-      // Ensure consistent relationship ID format
-      rel.id = `${rel.from}_${rel.type}_${rel.to}`;
-      expandedRelationships.get(node.id).add(rel.id);
-    });
-    
-    // 5. Filter out duplicate relationships
-    const existingRelIds = new Set();
-    nvl.getRelationships().forEach(r => {
-      if (r && r.from && r.to) {
-        const type = (r.type || r.caption || '').toUpperCase();
-        existingRelIds.add(`${r.from}_${type}_${r.to}`);
+      if (!existingNodeIds.has(n.id)) {
+        nodesToAdd.push(n);
       }
     });
 
-    // Filter out relationships that already exist
-    const newRels = connections.relationships.filter(r => !existingRelIds.has(r.id));
-
-    // Normalize relationships before adding to graph
-    newRels.forEach(rel => {
-      rel.type = rel.type.toUpperCase();
-      rel.caption = rel.caption ? rel.caption.toUpperCase() : rel.type;
-      rel.id = `${rel.from}_${rel.type}_${rel.to}`;
-    });
-    
-    // 6. Add to graph
-    console.log(`Adding ${connections.nodes.length} nodes and ${newRels.length} relationships to graph`);
+    // Merge onto the existing node rather than replace it, so nvl-managed
+    // fields (position, pinned, etc.) survive the expansion.
     const originalNode = nvl.getNodeById(node.id);
-    const updatedNode = {
-      ...originalNode,
-      ...node,
-    };
-    const finalNodes = connections.nodes.map(n => n.id === node.id ? updatedNode : n);
-    nvl.addAndUpdateElementsInGraph(finalNodes, newRels);
-    
-    // 7. Adjust view
-    if (connections.nodes.length > 0) {
-      nvl.fit(connections.nodes.map(n => n.id));
+    const updatedNode = { ...originalNode, ...node };
+
+    console.log(`Adding ${nodesToAdd.length} nodes and ${relsToAdd.length} relationships to graph`);
+    nvl.addAndUpdateElementsInGraph([updatedNode, ...nodesToAdd], relsToAdd);
+
+    if (rec.nodeIds.size > 0) {
+      nvl.fit([node.id, ...rec.nodeIds]);
     }
+
+    const records = expanded.get(node.id) || [];
+    records.push(rec);
+    expanded.set(node.id, records);
   } catch (error) {
     console.error("Error processing connections:", error);
   }
@@ -514,21 +456,13 @@ function processRelationshipType(relType, outgoingData, incomingData, node) {
         for (const targetNode of row) {
           // Add to outNodes - make sure to check the node label
           const nodeLabel = targetNode.label || '';
-          
-          // Determine node color based on label
-          let nodeColor = null;
-          if (colorMap.has(nodeLabel)) {
-            nodeColor = colorMap.get(nodeLabel);
-          } else {
-            nodeColor = default_node_color; // Default color
-          }
-          
+
           outNodes.push({
             id: targetNode.id,
             labels: [nodeLabel],
             properties: {...targetNode},
             caption: getBestNodeCaption(targetNode),
-            color: nodeColor
+            color: colorForLabel(nodeLabel)
           });
           
           // Create relationship - normalize relationship type to uppercase
@@ -554,21 +488,13 @@ function processRelationshipType(relType, outgoingData, incomingData, node) {
         for (const sourceNode of row) {
           // Add to inNodes - make sure to check the node label
           const nodeLabel = sourceNode.label || '';
-          
-          // Determine node color based on label
-          let nodeColor = null;
-          if (colorMap.has(nodeLabel)) {
-            nodeColor = colorMap.get(nodeLabel);
-          } else {
-            nodeColor = default_node_color; // Default color
-          }
-          
+
           inNodes.push({
             id: sourceNode.id,
             labels: [nodeLabel],
             properties: {...sourceNode},
             caption: getBestNodeCaption(sourceNode),
-            color: nodeColor
+            color: colorForLabel(nodeLabel)
           });
           
           // Create relationship - normalize relationship type to uppercase
@@ -638,111 +564,55 @@ function processRelationshipType(relType, outgoingData, incomingData, node) {
  * @param {Object} node - Node to collapse
  * @param {Object} nvl - NVL instance
  */
-function collapseNode(node, nvl) {
+function collapseNode(node, nvl, seen) {
+  seen = seen || new Set();
+  if (seen.has(node.id)) return; // cycle guard for mutually-expanded nodes
+  seen.add(node.id);
+
   console.log(`Collapsing node ${node.id}`);
   showNotification(`Collapsing: ${getBestNodeCaption(node)}`);
-  
-  // Track all nodes and relationships that should be removed
+
+  const records = expanded.get(node.id) || [];
+
+  // Cascade: a descendant this node revealed may itself have been expanded
+  // further — collapse it first so nothing is orphaned mid-collapse.
+  records.forEach(rec => {
+    rec.nodeIds.forEach(childId => {
+      if (childId !== node.id && expanded.has(childId)) {
+        collapseNode(nvl.getNodeById(childId) || { id: childId }, nvl, seen);
+      }
+    });
+  });
+
+  const relsToRemove = new Set();
   const nodesToRemove = new Set();
-  const relationshipsToRemove = new Set();
-  
-  // 1. Get expanded nodes in order of expansion
-  const expandedNodeIds = Array.from(expandedNodes.keys());
-  const collapsingIndex = expandedNodeIds.indexOf(node.id);
-  
-  if (collapsingIndex === -1) {
-    console.error(`Node ${node.id} not found in expanded nodes!`);
-    return;
-  }
-  
-  // 2. Get all nodes expanded after the current one (including the current one)
-  const nodesToCollapse = [node.id, ...expandedNodeIds.slice(collapsingIndex + 1)];
-  const remainingExpandedNodes = expandedNodeIds.slice(0, collapsingIndex);
-  
-  console.log(`Collapsing nodes: ${nodesToCollapse.join(', ')}`);
-  console.log(`Remaining expanded nodes: ${remainingExpandedNodes.join(', ')}`);
-  
-  // 3. Gather all nodes that were added by the nodes being collapsed
-  nodesToCollapse.forEach(expandedNodeId => {
-    // Get direct children of this expanded node
-    const directChildren = expandedNodes.get(expandedNodeId) || [];
-    
-    directChildren.forEach(childId => {
-      // Skip initial nodes - we never want to remove these
-      if (initialNodeIds.has(childId)) {
-        return;
-      }
-      
-      // Check if any remaining expanded node owns this child
-      if (nodeOwnership.has(childId)) {
-        const owners = nodeOwnership.get(childId);
-        const hasRemainingOwner = Array.from(owners).some(owner => 
-          remainingExpandedNodes.includes(owner)
-        );
-        
-        if (hasRemainingOwner) {
-          console.log(`Node ${childId} is still owned by remaining expanded node - will keep`);
-          return;
-        }
-      }
-      
-      // Add this child to nodes to remove
-      nodesToRemove.add(childId);
-      console.log(`Will remove node ${childId} - added by ${expandedNodeId}`);
-    });
-    
-    // Get relationships added by this expansion
-    const expandedRels = expandedRelationships.get(expandedNodeId) || new Set();
-    expandedRels.forEach(relId => {
-      // NEVER remove initial relationships
-      if (!initialRelationshipIds.has(relId)) {
-        relationshipsToRemove.add(relId);
-      }
-    });
-  });
-  
-  // 4. Perform removals
-  const nodeIdsToRemove = Array.from(nodesToRemove);
-  const relationshipIdsToRemove = Array.from(relationshipsToRemove);
-  
-  // Remove relationships first
-  if (relationshipIdsToRemove.length > 0) {
-    console.log(`Removing ${relationshipIdsToRemove.length} relationships`);
-    nvl.removeRelationshipsWithIds(relationshipIdsToRemove);
-  }
-  
-  // Then remove nodes
-  if (nodeIdsToRemove.length > 0) {
-    console.log(`Removing ${nodeIdsToRemove.length} nodes`);
-    nvl.removeNodesWithIds(nodeIdsToRemove);
-    
-    // Update ownership records
-    nodeIdsToRemove.forEach(childId => {
-      if (nodeOwnership.has(childId)) {
-        // Remove ownership records for collapsed nodes
-        nodesToCollapse.forEach(expandedId => {
-          if (nodeOwnership.get(childId)) {
-            nodeOwnership.get(childId).delete(expandedId);
-          }
-        });
-        
-        // If no owners remain, delete the entry
-        if (nodeOwnership.get(childId).size === 0) {
-          nodeOwnership.delete(childId);
+
+  records.forEach(rec => {
+    rec.relIds.forEach(relId => relsToRemove.add(relId));
+    rec.nodeIds.forEach(childId => {
+      const remaining = (nodeRefs.get(childId) || 0) - 1;
+      if (remaining > 0) {
+        nodeRefs.set(childId, remaining); // still revealed by another live expansion — keep
+      } else {
+        nodeRefs.delete(childId);
+        if (!initialNodeIds.has(childId) && !expanded.has(childId)) {
+          nodesToRemove.add(childId);
         }
       }
     });
-  }
-  
-  // 5. Clean up expansion state for all collapsed nodes
-  nodesToCollapse.forEach(expandedId => {
-    expandedRelationships.delete(expandedId);
-    expandedNodes.delete(expandedId);
-    nodeRelationshipsByType.delete(expandedId);
-    nodeHierarchy.delete(expandedId);
-    console.log(`Cleaned up expansion state for ${expandedId}`);
   });
-  
+
+  if (relsToRemove.size > 0) {
+    console.log(`Removing ${relsToRemove.size} relationships`);
+    nvl.removeRelationshipsWithIds(Array.from(relsToRemove));
+  }
+
+  if (nodesToRemove.size > 0) {
+    console.log(`Removing ${nodesToRemove.size} nodes`);
+    nvl.removeNodesWithIds(Array.from(nodesToRemove));
+  }
+
+  expanded.delete(node.id);
   console.log("Collapse complete.");
 }
 
@@ -792,11 +662,17 @@ export const setupInteraction = (nvl) => {
     // Toggle expand/collapse on double-click
     clickInteraction.updateCallback('onNodeDoubleClick', async (node) => {
       if (!node || !node.id) return;
-      
+
+      // A single user double-click can surface more than one dblclick event;
+      // collapse repeated on the same node within 400ms into one toggle.
+      const now = Date.now();
+      if (lastToggle.id === node.id && now - lastToggle.t < 400) return;
+      lastToggle = { id: node.id, t: now };
+
       console.log('Node double clicked', node);
-      
+
       // If node is already expanded, collapse it
-      if (expandedNodes.has(node.id)) {
+      if (expanded.has(node.id)) {
         collapseNode(node, nvl);
       } else {
         // If not expanded, show dialog to expand
@@ -840,7 +716,7 @@ export const setupInteraction = (nvl) => {
               });
             }
 
-            processConnections(node, { nodes: mergedNodes, relationships: mergedRels }, nvl);
+            applyExpansion(node, { nodes: mergedNodes, relationships: mergedRels }, nvl);
           };
           
           const processSpecificRelationship = async (relType) => {
@@ -855,7 +731,7 @@ export const setupInteraction = (nvl) => {
               loadingOverlay.remove();
               
               // Process and display the connections
-              processConnections(node, connections, nvl);
+              applyExpansion(node, connections, nvl);
             } catch (error) {
               console.error(`Error processing ${relType} relationships:`, error);
               loadingOverlay.remove();

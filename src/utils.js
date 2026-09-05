@@ -2,7 +2,37 @@
 export const category10 = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b', '#e377c2', '#7f7f7f', '#bcbd22', '#17becf'];
 
 // Map to track label colors consistently across the application
-export const labelColorMap = new Map();
+const labelColorMap = new Map();
+
+/**
+ * Simple deterministic string hash (djb2-like).
+ * @param {string} s - String to hash
+ * @returns {number} Non-negative hash code
+ */
+function hashString(s) {
+  let h = 0;
+  for (let i = 0; i < s.length; i++) {
+    h = (h * 31 + s.charCodeAt(i)) | 0;
+  }
+  return Math.abs(h);
+}
+
+/**
+ * Get a color for a node label. Colors are derived from a hash of the label
+ * name, so the same label always gets the same color regardless of which
+ * label happens to be seen first — unlike an insertion-order index, this is
+ * consistent across different queries and sessions without needing a server
+ * round-trip to agree on an assignment order.
+ * @param {string} label - Node label
+ * @returns {string} Hex color
+ */
+export const colorForLabel = (label) => {
+  const key = label || 'Unknown';
+  if (!labelColorMap.has(key)) {
+    labelColorMap.set(key, category10[hashString(key) % category10.length]);
+  }
+  return labelColorMap.get(key);
+};
 
 /**
  * Find the best caption for a node based on common naming properties
@@ -59,17 +89,11 @@ export const getBestNodeCaption = (node) => {
 export const processNodes = (nodes) => {
   return nodes.map((node) => {
     const primaryLabel = node.labels && node.labels.length > 0 ? node.labels[0] : 'Unknown';
-    
-    // Assign color based on label
-    if (!labelColorMap.has(primaryLabel)) {
-      const colorIndex = labelColorMap.size % category10.length;
-      labelColorMap.set(primaryLabel, category10[colorIndex]);
-    }
-    
+
     return {
       ...node,
       caption: getBestNodeCaption(node),
-      color: labelColorMap.get(primaryLabel)
+      color: colorForLabel(primaryLabel)
     };
   });
 };

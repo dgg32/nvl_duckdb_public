@@ -18,7 +18,6 @@ CORS(app)
 # Global connection to DuckDB
 conn = None
 _db_lock = threading.Lock()
-node_types = set()
 outgoing_relations = {}  # Source node -> outgoing relations
 incoming_relations = {}  # Destination node -> incoming relations
 graph_name = ""
@@ -52,8 +51,7 @@ def initialize_db():
     global graph_name
     global outgoing_relations
     global incoming_relations
-    global node_types
-    
+
     if conn is not None:
         return conn
 
@@ -126,9 +124,6 @@ def initialize_db():
                             if not duplicate:
                                 incoming_relations[destination_r[0]].append({"relation": relation_r[0], "source": source_r[0]})
 
-                        node_types.add(source_r[0])
-                        node_types.add(destination_r[0])
-
                 print("Outgoing relations:", outgoing_relations)
                 print("Incoming relations:", incoming_relations)
                 return conn
@@ -180,16 +175,6 @@ def execute_query():
         print(f"Server error: {e}")
         return jsonify({'error': f"Server error: {str(e)}"}), 500
 
-
-@app.route('/api/node-types', methods=['POST'])
-def get_node_types():
-    try:
-        db_conn = initialize_db()
-        return jsonify({'results': list(node_types)})
-        
-    except Exception as e:
-        print(f"Server error: {e}")
-        return jsonify({'error': f"Server error: {str(e)}"}), 500
 
 @app.route('/api/default-query', methods=['GET'])
 def get_default_query():
